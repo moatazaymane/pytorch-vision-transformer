@@ -72,6 +72,8 @@ def train_val_loop(model, train_dl: DataLoader, val_dl: DataLoader):
     for epoch in range(start, n_epochs):
 
         vit_model.train()
+        iterator = tqdm(train_dl, desc=f"epoch {epoch:02d}")
+
 
         for batch in iterator:
             # vit_model.train()

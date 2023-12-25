@@ -11,9 +11,8 @@ class Projection(nn.Module):
         self.projection = nn.Linear(width * n_channels, num_classes)
 
     def forward(self, inp):
-        assert inp[:, :, 0, :].flatten(1).shape[1] == self.width * self.n_channels
-        out = self.projection(inp[:, :, 0, :].flatten(1))
-        out = torch.softmax(out, dim=1)
-
-        return out
-    
+        # assert inp[:, :, 0, :].flatten(1).shape[1] == self.width * self.n_channels
+        # out = self.projection(inp[:, :, 0, :].flatten(1))
+        out = torch.mean(inp, dim=2).flatten(1)
+        out = torch.log_softmax(out, dim=1)
+        return self.projection(out)

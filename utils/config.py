@@ -1,12 +1,12 @@
-batch_size = 32
-n_epochs = 10
+batch_size = 64
+n_epochs = 30
 patch_size = 4  # paper 16/ 32
 D = 512  # paper 1024
 Dmlp = 1024  # paper 2048
 lr_gap = 3e-4
 lr_cls = 8e-4
 h, k = 4, 4  # splitting the q k v representation into h q,k,v # k in original paper
-L = 4  # number of encoder blocks
+L = 8  # number of encoder blocks
 dropout = 0.1
 imgsize = 32
 num_classes = 10

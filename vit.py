@@ -41,6 +41,6 @@ def vit_instance(imgsize: int, patch_size: int, n_channels: int, width: int, L: 
     # mlp was zero initialized in the paper (initializing all params to zero)
 
     for param in vit.parameters():
-        torch.nn.init.zeros_(param)
+      torch.nn.init.normal_(param, 0, 0.02)  # following the gpt1 paper
 
     return vit
