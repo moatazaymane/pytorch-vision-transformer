@@ -65,6 +65,7 @@ def train_val_loop(model, train_dl: DataLoader, val_dl: DataLoader):
     step, start = 0, 0
     if load_pretrained:
         state = torch.load(model_path)
+        vit_model.load_state_dict(state['model_state_dict'])
         start = state['epoch'] + 1
         optimizer.load_state_dict(state['optimizer_state_dict'])
         step = state['step']
