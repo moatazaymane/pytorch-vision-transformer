@@ -1,29 +1,30 @@
-from tqdm import tqdm
-import torch
+from tqdm.notebook import tqdm
 import os
-from torch.utils.data import DataLoader
+import torch
 from torchvision.datasets import CIFAR10
-from vit import vit_instance
+from utils.config import *
+from torch.utils.data import DataLoader
+import json
 from dataset import VitDataset
-from utils.config import imgsize, patch_size, n_channels, D, L, k, Dmlp, num_classes, model_path, load_pretrained, \
-    lr_cls, n_epochs, batch_size
-
-vit_model = vit_instance(imgsize=imgsize, patch_size=patch_size, n_channels=n_channels, width=D, L=L, k=k, Dmlp=Dmlp,
-                         num_classes=num_classes, dropout=0.1)
-
-root = os.getcwd()
-train_images = CIFAR10(root, download=True, train=True)
-test_images = CIFAR10(root, download=True, train=False)
-ds, test_ds = (VitDataset(train_images.data, train_images.targets, patch_size, len(train_images.targets)),
-               VitDataset(test_images.data, test_images.targets, patch_size, len(train_images.targets)))
-
-train_dl, val_dl = (DataLoader(ds, batch_size=batch_size, shuffle=True),
-                    DataLoader(test_ds, batch_size=batch_size, shuffle=False))
+from vit import vit_instance
 
 
-def val_accuracy(model, dl, device, iterator):
+def adaptive_lr(decay_epochs: int, decay: int, current_epoch: int, optimizer: torch.optim.Optimizer) -> torch.optim.Optimizer:
+
+  if current_epoch % decay_epochs != 0:
+
+    return optimizer
+
+  for parameter in optimizer.param_groups:
+    parameter['lr'] /= decay
+
+  return optimizer
+
+
+def val_accuracy(model, dl, device, iterator, epoch):
     total_correct, val_size = 0, 0
     model.eval()
+
 
     with torch.no_grad():
         p = 0
@@ -34,7 +35,7 @@ def val_accuracy(model, dl, device, iterator):
             inp, target = batch["flattened_patches"].to(device), batch["target"].to(device)
             size = inp.shape[0]
             target = target.to(dtype=torch.int64).to(device)
-            outputs = vit_model(inp)
+            outputs = model(inp)
 
             predicted = torch.softmax(outputs, dim=1).argmax(dim=1).detach().cpu().tolist()
             target = target.detach().cpu().tolist()
@@ -51,47 +52,73 @@ def val_accuracy(model, dl, device, iterator):
             val_size += size
 
         iterator.write('\n')
-        iterator.write(f"Validation Accuracy after training epoch : {total_correct / val_size:.2f}")
+        iterator.write(f"Validation Accuracy after training epoch {epoch} : {total_correct / val_size:.2f}")
         iterator.write('\n')
+        return float(total_correct / val_size)
+
+        #if epoch % decay_epochs==0:
+
+          #iterator.write(f"New Learning rate {last_lr} --> {lr:.6f}")
 
 
-def train_val_loop(model, train_dl: DataLoader, val_dl: DataLoader):
-    iterator = tqdm(train_dl)
+def train_val_loop(vit_model):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model.to(device)
-    optimizer = torch.optim.Adam(vit_model.parameters(), lr=lr_cls)
+    data_test = CIFAR10(os.getcwd(), download=True, train=False)
+    vit_model.to(device)
+    optimizer = torch.optim.Adam(vit_model.parameters(), lr=lr_gap)
     loss_function = torch.nn.CrossEntropyLoss()
 
     step, start = 0, 0
     if load_pretrained:
-        state = torch.load(model_path)
+        state = torch.load(model_path_l16)
         vit_model.load_state_dict(state['model_state_dict'])
         start = state['epoch'] + 1
         optimizer.load_state_dict(state['optimizer_state_dict'])
         step = state['step']
 
-    for epoch in range(start, n_epochs):
+    test_ds = VitDataset(data_test.data, data_test.targets, patch_size, num_classes, preprocess=False, transform = False)
+    val_dl = DataLoader(test_ds, batch_size = batch_size, shuffle=False)
+
+    data_train, targets = torch.load(train_data_path), torch.load(targets_path)
+
+    assert data_train.shape[0] == 3*50000
+
+    Loss, Accuracy = {}, {}
+
+    for epoch in range(start, 30):
+
+        train_ds = VitDataset(data_train, targets, patch_size, num_classes, preprocess=False, transform=True)
+        train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
 
         vit_model.train()
         iterator = tqdm(train_dl, desc=f"epoch {epoch:02d}")
 
-
         for batch in iterator:
-            # vit_model.train()
+
             inp, target = batch["flattened_patches"].to(device), batch["target"].to(device)
             target = target.to(dtype=torch.int64).to(device)
             output = vit_model.forward(inp)
+
             loss = loss_function(output.view(-1, num_classes).to(device),
                                  target.type(torch.LongTensor).view(-1).to(device))
             iterator.set_postfix({'Loss': f"{loss.item():6.3f}"})
 
             loss.backward()
-
             optimizer.step()
             optimizer.zero_grad()
             step += 1
-        val_accuracy(vit_model, val_dl, device, iterator)
 
+        accuracy = val_accuracy(vit_model, val_dl, device, iterator, epoch)
+        Loss[epoch] = float(loss.item())
+        Accuracy[epoch] = float(accuracy)
+
+        with open(loss_path_l16, "w") as f:
+          json.dump(Loss, f)
+
+        with open(accuracy_path_l16, "w") as f:
+          json.dump(Accuracy, f)
+
+        optimizer= adaptive_lr( 10, 5, epoch)
         torch.save(
             {
                 "epoch": epoch,
@@ -99,8 +126,12 @@ def train_val_loop(model, train_dl: DataLoader, val_dl: DataLoader):
                 "optimizer_state_dict": optimizer.state_dict(),
                 "step": step
             },
-            model_path
+            model_path_l16
         )
 
+if __name__ == '__main__':
 
-train_val_loop(vit_model, train_dl, val_dl)
+    from utils.config import *
+
+    vit_model = vit_instance(imgsize, patch_size, n_channels, D, L, k, Dmlp, num_classes, dropout)
+    train_val_loop(vit_model)

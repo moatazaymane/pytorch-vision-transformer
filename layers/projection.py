@@ -14,5 +14,7 @@ class Projection(nn.Module):
         # assert inp[:, :, 0, :].flatten(1).shape[1] == self.width * self.n_channels
         # out = self.projection(inp[:, :, 0, :].flatten(1))
         out = torch.mean(inp, dim=2).flatten(1)
-        out = torch.log_softmax(out, dim=1)
-        return self.projection(out)
+
+        out = self.projection(out)
+
+        return torch.log_softmax(out, dim=1)
