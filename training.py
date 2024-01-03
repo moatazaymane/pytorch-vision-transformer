@@ -8,18 +8,6 @@ import json
 from dataset import VitDataset
 from vit import vit_instance
 
-from tqdm.notebook import tqdm
-import os
-import torch
-from torchvision.datasets import CIFAR10
-from utils.config import *
-from torch.utils.data import DataLoader
-import json
-from dataset import VitDataset
-from vit import vit_instance
-
-batch_size = 1
-
 
 def adaptive_lr(decay_epochs: int, decay: int, current_epoch: int,
                 optimizer: torch.optim.Optimizer) -> torch.optim.Optimizer:
@@ -32,7 +20,7 @@ def adaptive_lr(decay_epochs: int, decay: int, current_epoch: int,
     return optimizer
 
 
-def val_accuracy(model, dl, device, iterator, epoch, batch_accuracies):
+def val_accuracy(model, dl, device, iterator, epoch, batch_accuracies, batch_sizes):
     total_correct, val_size = 0, 0
     model.eval()
 
@@ -63,7 +51,7 @@ def val_accuracy(model, dl, device, iterator, epoch, batch_accuracies):
 
         iterator.write('\n')
         iterator.write(
-            f"Training Accuracy after training epoch {epoch} : {sum(batch_accuracies) / len(batch_accuracies):.2f}")
+            f"Training Accuracy after training epoch {epoch} : {sum(batch_accuracies) / sum(batch_sizes):.2f}")
         iterator.write(f"Validation Accuracy after training epoch {epoch} : {total_correct / val_size:.2f}")
 
         iterator.write('\n')
@@ -98,7 +86,7 @@ def train_val_loop(vit_model):
 
     Loss, Accuracy = {}, {}
 
-    for epoch in range(start, 30):
+    for epoch in range(start, 100):
 
         train_ds = VitDataset(data_train, targets, patch_size, num_classes, preprocess=False, transform=True)
         train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
@@ -106,6 +94,7 @@ def train_val_loop(vit_model):
         vit_model.train()
         iterator = tqdm(train_dl, desc=f"epoch {epoch:02d}")
         batch_accuracies = []
+        batch_sizes = []
 
         for batch in iterator:
 
@@ -119,13 +108,14 @@ def train_val_loop(vit_model):
             target_ = target.detach().cpu().tolist()
             assert len(predicted_) == len(target_)
 
-            batch_accuracy = 0
+            batch_correct = 0
             for i in range(len(predicted_)):
 
                 if predicted_[i] == target_[i]:
-                    batch_accuracy += 1
+                    batch_correct += 1
 
-            batch_accuracies.append(batch_accuracy / batch_len)
+            batch_accuracies.append(batch_correct)
+            batch_sizes.append(batch_len)
 
             loss = loss_function(output.view(-1, num_classes).to(device),
                                  target.type(torch.LongTensor).view(-1).to(device))
@@ -136,17 +126,17 @@ def train_val_loop(vit_model):
             optimizer.zero_grad()
             step += 1
 
-        accuracy = val_accuracy(vit_model, val_dl, device, iterator, epoch, batch_accuracies)
-        Loss[epoch] = float(loss.item())
-        Accuracy[epoch] = float(accuracy)
+            accuracy = val_accuracy(vit_model, val_dl, device, iterator, epoch, batch_accuracies, batch_sizes)
+            Loss[epoch] = float(loss.item())
+            Accuracy[epoch] = float(accuracy)
 
-        with open(loss_path_l16, "w") as f:
-            json.dump(Loss, f)
+            with open(loss_path_l16, "w") as f:
+                json.dump(Loss, f)
 
-        with open(accuracy_path_l16, "w") as f:
-            json.dump(Accuracy, f)
+            with open(accuracy_path_l16, "w") as f:
+                json.dump(Accuracy, f)
 
-        optimizer = adaptive_lr(10, 5, epoch, optimizer)
+            optimizer = adaptive_lr(10, 5, epoch, optimizer)
 
         torch.save(
             {
@@ -157,10 +147,3 @@ def train_val_loop(vit_model):
             },
             model_path_l16
         )
-
-if __name__ == '__main__':
-
-    from utils.config import *
-
-    vit_model = vit_instance(imgsize, patch_size, n_channels, D, L, k, Dmlp, num_classes, dropout)
-    train_val_loop(vit_model)
