@@ -8,23 +8,33 @@ import json
 from dataset import VitDataset
 from vit import vit_instance
 
+from tqdm.notebook import tqdm
+import os
+import torch
+from torchvision.datasets import CIFAR10
+from utils.config import *
+from torch.utils.data import DataLoader
+import json
+from dataset import VitDataset
+from vit import vit_instance
 
-def adaptive_lr(decay_epochs: int, decay: int, current_epoch: int, optimizer: torch.optim.Optimizer) -> torch.optim.Optimizer:
+batch_size = 1
 
-  if current_epoch % decay_epochs != 0:
+
+def adaptive_lr(decay_epochs: int, decay: int, current_epoch: int,
+                optimizer: torch.optim.Optimizer) -> torch.optim.Optimizer:
+    if current_epoch % decay_epochs != 0:
+        return optimizer
+
+    for parameter in optimizer.param_groups:
+        parameter['lr'] /= decay
 
     return optimizer
 
-  for parameter in optimizer.param_groups:
-    parameter['lr'] /= decay
 
-  return optimizer
-
-
-def val_accuracy(model, dl, device, iterator, epoch):
+def val_accuracy(model, dl, device, iterator, epoch, batch_accuracies):
     total_correct, val_size = 0, 0
     model.eval()
-
 
     with torch.no_grad():
         p = 0
@@ -52,13 +62,16 @@ def val_accuracy(model, dl, device, iterator, epoch):
             val_size += size
 
         iterator.write('\n')
+        iterator.write(
+            f"Training Accuracy after training epoch {epoch} : {sum(batch_accuracies) / len(batch_accuracies):.2f}")
         iterator.write(f"Validation Accuracy after training epoch {epoch} : {total_correct / val_size:.2f}")
+
         iterator.write('\n')
         return float(total_correct / val_size)
 
-        #if epoch % decay_epochs==0:
+        # if epoch % decay_epochs==0:
 
-          #iterator.write(f"New Learning rate {last_lr} --> {lr:.6f}")
+        # iterator.write(f"New Learning rate {last_lr} --> {lr:.6f}")
 
 
 def train_val_loop(vit_model):
@@ -76,12 +89,12 @@ def train_val_loop(vit_model):
         optimizer.load_state_dict(state['optimizer_state_dict'])
         step = state['step']
 
-    test_ds = VitDataset(data_test.data, data_test.targets, patch_size, num_classes, preprocess=False, transform = False)
-    val_dl = DataLoader(test_ds, batch_size = batch_size, shuffle=False)
+    test_ds = VitDataset(data_test.data, data_test.targets, patch_size, num_classes, preprocess=False, transform=False)
+    val_dl = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
 
     data_train, targets = torch.load(train_data_path), torch.load(targets_path)
 
-    assert data_train.shape[0] == 3*50000
+    assert data_train.shape[0] == 3 * 50000
 
     Loss, Accuracy = {}, {}
 
@@ -92,12 +105,27 @@ def train_val_loop(vit_model):
 
         vit_model.train()
         iterator = tqdm(train_dl, desc=f"epoch {epoch:02d}")
+        batch_accuracies = []
 
         for batch in iterator:
 
             inp, target = batch["flattened_patches"].to(device), batch["target"].to(device)
+            batch_len = inp.shape[0]
             target = target.to(dtype=torch.int64).to(device)
             output = vit_model.forward(inp)
+
+            # Training Accuracy
+            predicted_ = torch.softmax(output, dim=1).argmax(dim=1).detach().cpu().tolist()
+            target_ = target.detach().cpu().tolist()
+            assert len(predicted_) == len(target_)
+
+            batch_accuracy = 0
+            for i in range(len(predicted_)):
+
+                if predicted_[i] == target_[i]:
+                    batch_accuracy += 1
+
+            batch_accuracies.append(batch_accuracy / batch_len)
 
             loss = loss_function(output.view(-1, num_classes).to(device),
                                  target.type(torch.LongTensor).view(-1).to(device))
@@ -108,17 +136,18 @@ def train_val_loop(vit_model):
             optimizer.zero_grad()
             step += 1
 
-        accuracy = val_accuracy(vit_model, val_dl, device, iterator, epoch)
+        accuracy = val_accuracy(vit_model, val_dl, device, iterator, epoch, batch_accuracies)
         Loss[epoch] = float(loss.item())
         Accuracy[epoch] = float(accuracy)
 
         with open(loss_path_l16, "w") as f:
-          json.dump(Loss, f)
+            json.dump(Loss, f)
 
         with open(accuracy_path_l16, "w") as f:
-          json.dump(Accuracy, f)
+            json.dump(Accuracy, f)
 
-        optimizer= adaptive_lr( 10, 5, epoch)
+        optimizer = adaptive_lr(10, 5, epoch, optimizer)
+
         torch.save(
             {
                 "epoch": epoch,
